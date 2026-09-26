@@ -1,34 +1,51 @@
-const apiBase = (process.env.DAILY_HOT_API_BASE || "https://api-hot.imsyy.top").replace(/\/$/, "");
-const itemLimit = Number.parseInt(process.env.ITEMS_PER_SOURCE || "3", 10);
+const itemLimit = Number.parseInt(process.env.ITEMS_PER_SOURCE || "5", 10);
 const sources = [
-  ["微博热搜", "weibo"],
-  ["知乎热榜", "zhihu"],
-  ["哔哩哔哩热门", "bilibili"],
-  ["36 氪热榜", "36kr"],
+  ["IT之家热门", "https://www.ithome.com/rss/"],
+  ["Hacker News 热门", "https://news.ycombinator.com/rss"],
 ];
 
 if (!Number.isInteger(itemLimit) || itemLimit < 1 || itemLimit > 10) {
   throw new Error("ITEMS_PER_SOURCE must be an integer between 1 and 10.");
 }
 
-async function fetchSource(name, path) {
-  const response = await fetch(`${apiBase}/${path}?limit=${itemLimit}`, {
-    headers: { "user-agent": "daily-hot-wechat/1.0" },
+function decodeXml(value) {
+  return value
+    .replaceAll("<![CDATA[", "")
+    .replaceAll("]]>", "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .trim();
+}
+
+function element(xml, tag) {
+  return xml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"))?.[1];
+}
+
+async function fetchSource(name, url) {
+  const response = await fetch(url, {
+    headers: { "user-agent": "daily-hot-wechat/1.1" },
+    signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
 
-  const body = await response.json();
-  if (!Array.isArray(body.data)) {
-    throw new Error("response does not contain a data array");
-  }
-
-  const items = body.data
-    .filter((item) => typeof item?.title === "string" && typeof item?.url === "string")
+  const xml = await response.text();
+  const items = [...xml.matchAll(/<item[\s>][\s\S]*?<\/item>/gi)]
+    .map((match) => {
+      const item = match[0];
+      return {
+        title: decodeXml(element(item, "title") || ""),
+        url: decodeXml(element(item, "link") || ""),
+      };
+    })
+    .filter((item) => item.title && item.url)
     .slice(0, itemLimit);
   if (items.length === 0) {
-    throw new Error("response contains no linkable items");
+    throw new Error("RSS feed contains no linkable items");
   }
   return { name, items };
 }
@@ -38,7 +55,7 @@ function markdownLink(title, url) {
 }
 
 const settled = await Promise.allSettled(
-  sources.map(([name, path]) => fetchSource(name, path)),
+  sources.map(([name, url]) => fetchSource(name, url)),
 );
 const successful = settled
   .filter((result) => result.status === "fulfilled")
@@ -52,7 +69,7 @@ for (const { name, result } of failures) {
 }
 
 if (successful.length === 0) {
-  throw new Error("All hot-list sources failed. No message was sent.");
+  throw new Error("All digest sources failed. No message was sent.");
 }
 
 const date = new Intl.DateTimeFormat("zh-CN", {
@@ -73,7 +90,7 @@ if (failures.length > 0) {
 }
 
 const title = `每日热榜 ${date}`;
-const desp = `${sections.join("\n\n")}\n\n---\n数据来自公开热榜，仅供参考。`;
+const desp = `${sections.join("\n\n")}\n\n---\n数据来自公开 RSS，仅供参考。`;
 const sendKey = process.env.SERVERCHAN_SENDKEY;
 
 if (!sendKey) {
