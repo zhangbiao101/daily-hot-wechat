@@ -1,0 +1,12 @@
+{
+  "name": "daily-hot-wechat",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "digest": "node scripts/digest.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
