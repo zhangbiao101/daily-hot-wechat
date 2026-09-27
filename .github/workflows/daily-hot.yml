@@ -2,22 +2,59 @@ name: Daily hot list to WeChat
 
 on:
   schedule:
-    - cron: "30 23 * * *"
+    # 07:25-07:55 China time. Multiple attempts absorb GitHub schedule delays.
+    - cron: "25-55/5 23 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: daily-hot-wechat
+  cancel-in-progress: false
 
 jobs:
   send-digest:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - name: Check delivery window
+        id: clock
+        shell: bash
+        run: |
+          day="$(TZ=Asia/Shanghai date +%F)"
+          should_send=true
+          cache_key="daily-hot-${day}"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            cache_key="daily-hot-manual-${{ github.run_id }}"
+          fi
+
+          echo "should_send=${should_send}" >> "$GITHUB_OUTPUT"
+          echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore daily delivery marker
+        if: steps.clock.outputs.should_send == 'true'
+        id: sent-cache
+        uses: actions/cache@v6
+        with:
+          path: .daily-hot-sent
+          key: ${{ steps.clock.outputs.cache_key }}
+
+      - uses: actions/checkout@v6
+        if: steps.clock.outputs.should_send == 'true' && steps.sent-cache.outputs.cache-hit != 'true'
+
+      - uses: actions/setup-node@v6
+        if: steps.clock.outputs.should_send == 'true' && steps.sent-cache.outputs.cache-hit != 'true'
         with:
           node-version: 22
-      - run: npm run digest
+
+      - name: Send digest
+        if: steps.clock.outputs.should_send == 'true' && steps.sent-cache.outputs.cache-hit != 'true'
+        run: |
+          npm run digest
+          touch .daily-hot-sent
         env:
           SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
           ITEMS_PER_SOURCE: "5"
